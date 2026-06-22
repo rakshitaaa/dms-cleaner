@@ -1,0 +1,165 @@
+[
+  {
+    "id": "stock_report_v1",
+    "name": "Stock Report Template",
+    "description": "Predefined template for IMEI/serial-level stock report cleaning and Siddha Connect stock import.",
+    "category": "Stock",
+    "fields": [
+      {
+        "outputField": "holderType",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "DEALER",
+        "required": false,
+        "aliases": ["Buyer Type", "Dealer Type", "Holder Type", "Customer Type"]
+      },
+      {
+        "outputField": "holderCode",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": true,
+        "aliases": ["Buyer Code", "Dealer Code", "Holder Code", "Customer Code", "Retailer Code"]
+      },
+      {
+        "outputField": "holderName",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": true,
+        "aliases": ["Buyer Name", "Dealer Name", "Holder Name", "Customer Name", "Retailer Name"]
+      },
+      {
+        "outputField": "holderStatus",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Buyer Status", "Dealer Status", "Holder Status", "Customer Status"]
+      },
+
+      {
+        "outputField": "sellerType",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Seller Type"]
+      },
+      {
+        "outputField": "sellerCode",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Seller Code"]
+      },
+      {
+        "outputField": "sellerName",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Seller Name"]
+      },
+      {
+        "outputField": "sellerStatus",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Seller Status"]
+      },
+
+      {
+        "outputField": "brand",
+        "sourceColumn": "",
+        "cleaningRule": "lowercase",
+        "defaultValue": "samsung",
+        "required": false,
+        "aliases": ["Brand", "Division"]
+      },
+      {
+        "outputField": "productCategory",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Product Level 1", "Category", "Product Category"]
+      },
+      {
+        "outputField": "productSubCategory",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Product Level 2", "Sub Category", "Product Sub Category"]
+      },
+      {
+        "outputField": "productSegment",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Product Level 3", "Segment", "Product Segment"]
+      },
+      {
+        "outputField": "modelCode",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Product Level 4", "Model Code", "Model"]
+      },
+      {
+        "outputField": "productCode",
+        "sourceColumn": "",
+        "cleaningRule": "uppercase",
+        "defaultValue": "",
+        "required": true,
+        "aliases": ["Product Code", "SKU", "Item Code", "Material Code"]
+      },
+      {
+        "outputField": "productName",
+        "sourceColumn": "",
+        "cleaningRule": "none",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Product Name", "Item Name", "Material Name"]
+      },
+
+      {
+        "outputField": "imeiOrSerialNo",
+        "sourceColumn": "",
+        "cleaningRule": "none",
+        "defaultValue": "",
+        "required": true,
+        "aliases": ["IMEI/Serial No", "IMEI Serial No", "IMEI", "Serial No", "Serial Number", "IMEI Number"]
+      },
+      {
+        "outputField": "stockType",
+        "sourceColumn": "",
+        "cleaningRule": "none",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Stock Type"]
+      },
+      {
+        "outputField": "tertiaryDate",
+        "sourceColumn": "",
+        "cleaningRule": "date",
+        "defaultValue": "",
+        "required": false,
+        "aliases": ["Tertiary Date", "Date", "Stock Date"]
+      },
+      {
+        "outputField": "agingDays",
+        "sourceColumn": "",
+        "cleaningRule": "integer",
+        "defaultValue": "0",
+        "required": false,
+        "aliases": ["Aging(In Days)", "Aging In Days", "Aging Days", "Ageing Days", "Ageing(In Days)"]
+      }
+    ]
+  }
+]

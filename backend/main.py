@@ -2,11 +2,12 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Dict
+from typing import List, Optional
 import pandas as pd
 import os
 import uuid
 from datetime import datetime
+import json
 
 app = FastAPI(title="DMS Cleaner API")
 
@@ -20,6 +21,7 @@ app.add_middleware(
 
 UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "outputs"
+TEMPLATE_FILE = "templates/reportTemplates.json"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -27,9 +29,23 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
 
+class OutputField(BaseModel):
+    outputField: str
+    sourceColumn: Optional[str] = ""
+    cleaningRule: Optional[str] = "none"
+    defaultValue: Optional[str] = ""
+    required: Optional[bool] = False
+
+
 class CleanRequest(BaseModel):
     fileName: str
-    mapping: Dict[str, str]
+    fields: List[OutputField]
+
+
+def read_sheet(file_path):
+    if file_path.endswith(".csv"):
+        return pd.read_csv(file_path, dtype=str).fillna("")
+    return pd.read_excel(file_path, dtype=str).fillna("")
 
 
 def clean_text(value):
@@ -38,51 +54,88 @@ def clean_text(value):
     return str(value).strip()
 
 
-def normalize_code(value):
-    return clean_text(value).upper()
+def apply_cleaning_rule(value, rule):
+    value = clean_text(value)
+
+    if rule == "uppercase":
+        return value.upper()
+
+    if rule == "lowercase":
+        return value.lower()
+
+    if rule == "titlecase":
+        return value.title()
+
+    if rule == "number":
+        try:
+            return float(value)
+        except Exception:
+            return ""
+
+    if rule == "integer":
+        try:
+            return int(float(value))
+        except Exception:
+            return ""
+
+    if rule == "date":
+        if not value:
+            return ""
+
+        # Handles format like 20260605
+        if value.isdigit() and len(value) == 8:
+            return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
+
+        try:
+            return pd.to_datetime(value).strftime("%Y-%m-%d")
+        except Exception:
+            return value
+
+    # default: trim only
+    return value
 
 
-def normalize_name(value):
-    return clean_text(value).upper()
+def load_templates():
+    if not os.path.exists(TEMPLATE_FILE):
+        return []
+
+    with open(TEMPLATE_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def parse_date(value):
-    raw = clean_text(value)
-
-    if not raw:
-        return ""
-
-    # Handles 20260605
-    if raw.isdigit() and len(raw) == 8:
-        return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
-
-    try:
-        return pd.to_datetime(raw).strftime("%Y-%m-%d")
-    except Exception:
-        return raw
+def normalize_for_match(value):
+    return str(value or "").lower().replace(" ", "").replace("_", "").replace("-", "").replace("/", "").replace("(", "").replace(")", "")
 
 
-def aging_bucket(days):
-    try:
-        value = int(float(days))
-    except Exception:
-        value = 0
+def auto_map_template_fields(fields, headers):
+    normalized_headers = [
+        {
+            "original": header,
+            "normalized": normalize_for_match(header)
+        }
+        for header in headers
+    ]
 
-    if value <= 15:
-        return "0-15"
-    if value <= 30:
-        return "16-30"
-    if value <= 60:
-        return "31-60"
-    if value <= 90:
-        return "61-90"
-    return "90+"
+    mapped_fields = []
 
+    for field in fields:
+        field_copy = dict(field)
+        aliases = field_copy.get("aliases", [])
+        possible_names = [field_copy.get("outputField", "")] + aliases
 
-def read_sheet(file_path):
-    if file_path.endswith(".csv"):
-        return pd.read_csv(file_path, dtype=str).fillna("")
-    return pd.read_excel(file_path, dtype=str).fillna("")
+        normalized_aliases = [normalize_for_match(name) for name in possible_names]
+
+        matched_header = ""
+
+        for header in normalized_headers:
+            if header["normalized"] in normalized_aliases:
+                matched_header = header["original"]
+                break
+
+        field_copy["sourceColumn"] = matched_header
+        mapped_fields.append(field_copy)
+
+    return mapped_fields
 
 
 @app.get("/")
@@ -115,17 +168,14 @@ async def upload_sheet(file: UploadFile = File(...)):
             detail=f"Failed to read file: {str(e)}"
         )
 
-    headers = list(df.columns)
-    preview_rows = df.head(5).to_dict(orient="records")
-
     return {
         "success": True,
         "message": "File uploaded successfully.",
         "fileName": file_name,
         "originalName": file.filename,
-        "headers": headers,
+        "headers": list(df.columns),
         "totalRows": len(df),
-        "previewRows": preview_rows,
+        "previewRows": df.head(5).to_dict(orient="records"),
     }
 
 
@@ -137,67 +187,47 @@ async def clean_sheet(payload: CleanRequest):
         raise HTTPException(status_code=404, detail="Uploaded file not found.")
 
     df = read_sheet(file_path)
-    mapping = payload.mapping
 
     cleaned_rows = []
     errors = []
-
-    def get_value(row, db_field):
-        sheet_column = mapping.get(db_field)
-        if not sheet_column:
-            return ""
-        return row.get(sheet_column, "")
 
     for index, row in df.iterrows():
         row_dict = row.to_dict()
         row_number = index + 2
 
-        holder_code = normalize_code(get_value(row_dict, "holderCode"))
-        holder_name = normalize_name(get_value(row_dict, "holderName"))
-        product_code = normalize_code(get_value(row_dict, "productCode"))
-        imei_or_serial = clean_text(get_value(row_dict, "imeiOrSerialNo"))
+        cleaned_row = {}
+        row_errors = []
 
-        if not holder_code or not holder_name or not product_code or not imei_or_serial:
+        for field in payload.fields:
+            output_field = clean_text(field.outputField)
+
+            if not output_field:
+                continue
+
+            raw_value = ""
+
+            if field.sourceColumn:
+                raw_value = row_dict.get(field.sourceColumn, "")
+
+            if not clean_text(raw_value) and field.defaultValue:
+                raw_value = field.defaultValue
+
+            final_value = apply_cleaning_rule(raw_value, field.cleaningRule)
+
+            if field.required and not clean_text(final_value):
+                row_errors.append(f"Missing required field: {output_field}")
+
+            cleaned_row[output_field] = final_value
+
+        if row_errors:
             errors.append({
                 "rowNumber": row_number,
-                "reason": "Missing required field: holderCode, holderName, productCode, or imeiOrSerialNo",
+                "reasons": row_errors,
                 "rawRow": row_dict,
             })
             continue
 
-        aging_days_raw = clean_text(get_value(row_dict, "agingDays"))
-
-        try:
-            aging_days = int(float(aging_days_raw)) if aging_days_raw else 0
-        except Exception:
-            aging_days = 0
-
-        cleaned_rows.append({
-            "holderType": normalize_code(get_value(row_dict, "holderType")),
-            "holderCode": holder_code,
-            "holderName": holder_name,
-            "holderStatus": normalize_code(get_value(row_dict, "holderStatus")),
-
-            "sellerType": normalize_code(get_value(row_dict, "sellerType")),
-            "sellerCode": normalize_code(get_value(row_dict, "sellerCode")),
-            "sellerName": normalize_name(get_value(row_dict, "sellerName")),
-            "sellerStatus": normalize_code(get_value(row_dict, "sellerStatus")),
-
-            "brand": clean_text(get_value(row_dict, "brand")) or "samsung",
-
-            "productCategory": normalize_code(get_value(row_dict, "productCategory")),
-            "productSubCategory": normalize_code(get_value(row_dict, "productSubCategory")),
-            "productSegment": normalize_code(get_value(row_dict, "productSegment")),
-            "modelCode": normalize_code(get_value(row_dict, "modelCode")),
-            "productCode": product_code,
-            "productName": clean_text(get_value(row_dict, "productName")),
-
-            "imeiOrSerialNo": imei_or_serial,
-            "stockType": clean_text(get_value(row_dict, "stockType")),
-            "tertiaryDate": parse_date(get_value(row_dict, "tertiaryDate")),
-            "agingDays": aging_days,
-            "agingBucket": aging_bucket(aging_days),
-        })
+        cleaned_rows.append(cleaned_row)
 
     cleaned_df = pd.DataFrame(cleaned_rows)
 
@@ -208,7 +238,7 @@ async def clean_sheet(payload: CleanRequest):
 
     return {
         "success": True,
-        "message": "Sheet cleaned successfully.",
+        "message": "Report cleaned successfully.",
         "totalRows": len(df),
         "validRows": len(cleaned_rows),
         "invalidRows": len(errors),
@@ -216,4 +246,47 @@ async def clean_sheet(payload: CleanRequest):
         "previewRows": cleaned_rows[:20],
         "outputFileName": output_file_name,
         "downloadUrl": f"/outputs/{output_file_name}",
+    }
+
+@app.get("/api/templates")
+def get_templates():
+    templates = load_templates()
+
+    return {
+        "success": True,
+        "templates": templates
+    }
+
+
+@app.get("/api/templates/{template_id}/map")
+def get_template_with_auto_mapping(template_id: str, fileName: str):
+    file_path = os.path.join(UPLOAD_DIR, fileName)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Uploaded file not found.")
+
+    df = read_sheet(file_path)
+    headers = list(df.columns)
+
+    templates = load_templates()
+    selected_template = next(
+        (template for template in templates if template.get("id") == template_id),
+        None
+    )
+
+    if not selected_template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+
+    mapped_fields = auto_map_template_fields(
+        selected_template.get("fields", []),
+        headers
+    )
+
+    return {
+        "success": True,
+        "template": {
+            **selected_template,
+            "fields": mapped_fields
+        },
+        "headers": headers
     }

@@ -1,41 +1,93 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
 
 const API_BASE = "http://localhost:5055";
 
-const standardFields = [
-  { key: "holderType", label: "Holder Type" },
-  { key: "holderCode", label: "Holder Code *" },
-  { key: "holderName", label: "Holder Name *" },
-  { key: "holderStatus", label: "Holder Status" },
-
-  { key: "sellerType", label: "Seller Type" },
-  { key: "sellerCode", label: "Seller Code" },
-  { key: "sellerName", label: "Seller Name" },
-  { key: "sellerStatus", label: "Seller Status" },
-
-  { key: "brand", label: "Brand" },
-  { key: "productCategory", label: "Product Category" },
-  { key: "productSubCategory", label: "Product Sub Category" },
-  { key: "productSegment", label: "Product Segment" },
-  { key: "modelCode", label: "Model Code" },
-  { key: "productCode", label: "Product Code *" },
-  { key: "productName", label: "Product Name" },
-
-  { key: "imeiOrSerialNo", label: "IMEI / Serial No *" },
-  { key: "stockType", label: "Stock Type" },
-  { key: "tertiaryDate", label: "Tertiary Date" },
-  { key: "agingDays", label: "Aging Days" },
+const cleaningRules = [
+  { value: "none", label: "Trim only" },
+  { value: "uppercase", label: "Uppercase" },
+  { value: "lowercase", label: "Lowercase" },
+  { value: "titlecase", label: "Title Case" },
+  { value: "date", label: "Date Format" },
+  { value: "number", label: "Number" },
+  { value: "integer", label: "Integer" },
 ];
+
+const blankField = {
+  outputField: "",
+  sourceColumn: "",
+  cleaningRule: "none",
+  defaultValue: "",
+  required: false,
+  aliases: [],
+};
 
 function CleanerPage() {
   const [file, setFile] = useState(null);
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [headers, setHeaders] = useState([]);
   const [previewRows, setPreviewRows] = useState([]);
-  const [mapping, setMapping] = useState({});
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("custom");
+  const [fields, setFields] = useState([{ ...blankField }]);
   const [cleanResult, setCleanResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  const loadTemplates = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/templates`);
+      const backendTemplates = res.data.templates || [];
+
+      setTemplates([
+        {
+          id: "custom",
+          name: "Custom Blank Template",
+          description: "Create your own output format manually.",
+          fields: [{ ...blankField }],
+        },
+        ...backendTemplates,
+      ]);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to load templates.");
+    }
+  };
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const applyTemplate = async (templateId, fileName = uploadedFileName) => {
+    setSelectedTemplateId(templateId);
+    setCleanResult(null);
+
+    if (templateId === "custom") {
+      setFields([{ ...blankField }]);
+      return;
+    }
+
+    const selectedTemplate = templates.find(
+      (template) => template.id === templateId
+    );
+
+    if (!selectedTemplate) return;
+
+    if (!fileName) {
+      setFields(selectedTemplate.fields.map((field) => ({ ...field })));
+      return;
+    }
+
+    try {
+      const res = await axios.get(`${API_BASE}/api/templates/${templateId}/map`, {
+        params: { fileName },
+      });
+
+      setFields(res.data.template.fields || []);
+    } catch (error) {
+      console.error(error);
+      alert(error.response?.data?.detail || "Failed to apply template.");
+    }
+  };
 
   const handleUpload = async () => {
     if (!file) {
@@ -55,7 +107,10 @@ function CleanerPage() {
       setHeaders(res.data.headers || []);
       setPreviewRows(res.data.previewRows || []);
       setCleanResult(null);
-      setMapping({});
+
+      if (selectedTemplateId !== "custom") {
+        await applyTemplate(selectedTemplateId, res.data.fileName);
+      }
     } catch (error) {
       console.error(error);
       alert(error.response?.data?.detail || "Upload failed.");
@@ -64,11 +119,20 @@ function CleanerPage() {
     }
   };
 
-  const handleMappingChange = (fieldKey, sheetColumn) => {
-    setMapping((prev) => ({
-      ...prev,
-      [fieldKey]: sheetColumn,
-    }));
+  const updateField = (index, key, value) => {
+    setFields((prev) =>
+      prev.map((field, i) =>
+        i === index ? { ...field, [key]: value } : field
+      )
+    );
+  };
+
+  const addField = () => {
+    setFields((prev) => [...prev, { ...blankField }]);
+  };
+
+  const removeField = (index) => {
+    setFields((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleClean = async () => {
@@ -77,12 +141,19 @@ function CleanerPage() {
       return;
     }
 
+    const validFields = fields.filter((field) => field.outputField.trim());
+
+    if (validFields.length === 0) {
+      alert("Please add at least one output field.");
+      return;
+    }
+
     try {
       setLoading(true);
 
       const res = await axios.post(`${API_BASE}/api/cleaner/clean`, {
         fileName: uploadedFileName,
-        mapping,
+        fields: validFields,
       });
 
       setCleanResult(res.data);
@@ -95,12 +166,37 @@ function CleanerPage() {
   };
 
   return (
-    <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>
-      <h1>DMS Cleaner</h1>
-      <p>Upload sheet, map columns, and generate cleaned output.</p>
+    <div style={pageStyle}>
+      <header style={headerStyle}>
+        <h1>DMS Cleaner ⚡</h1>
+        <p>Upload messy reports. Map columns. Automate clean output.</p>
+      </header>
 
-      <div style={cardStyle}>
-        <h2>1. Upload Sheet</h2>
+      <section style={cardStyle}>
+        <h2>1. Choose Template</h2>
+
+        <select
+          value={selectedTemplateId}
+          onChange={(e) => applyTemplate(e.target.value)}
+          style={selectStyle}
+        >
+          {templates.map((template) => (
+            <option key={template.id} value={template.id}>
+              {template.name}
+            </option>
+          ))}
+        </select>
+
+        <p style={{ color: "#6b7280" }}>
+          {
+            templates.find((template) => template.id === selectedTemplateId)
+              ?.description
+          }
+        </p>
+      </section>
+
+      <section style={cardStyle}>
+        <h2>2. Upload Report</h2>
 
         <input
           type="file"
@@ -108,70 +204,130 @@ function CleanerPage() {
           onChange={(e) => setFile(e.target.files[0])}
         />
 
-        <button
-          onClick={handleUpload}
-          disabled={loading}
-          style={{ marginLeft: 12 }}
-        >
+        <button onClick={handleUpload} disabled={loading} style={buttonStyle}>
           {loading ? "Processing..." : "Upload"}
         </button>
-      </div>
+      </section>
 
       {headers.length > 0 && (
         <>
-          <div style={cardStyle}>
-            <h2>2. Map Columns</h2>
+          <section style={cardStyle}>
+            <h2>3. Output Format & Mapping</h2>
 
             <p>
-              Required fields: <b>Holder Code, Holder Name, Product Code, IMEI / Serial No</b>
+              Select a template above to prefill fields, then check the source
+              column mapping.
             </p>
 
-            <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th align="left">Our Field</th>
-                  <th align="left">Sheet Column</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {standardFields.map((field) => (
-                  <tr key={field.key}>
-                    <td>{field.label}</td>
-                    <td>
-                      <select
-                        value={mapping[field.key] || ""}
-                        onChange={(e) =>
-                          handleMappingChange(field.key, e.target.value)
-                        }
-                      >
-                        <option value="">-- Not Mapped --</option>
-
-                        {headers.map((header) => (
-                          <option key={header} value={header}>
-                            {header}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th>Output Field Name</th>
+                    <th>Source Column</th>
+                    <th>Cleaning Rule</th>
+                    <th>Default Value</th>
+                    <th>Required</th>
+                    <th>Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
 
-            <button
-              onClick={handleClean}
-              disabled={loading}
-              style={{ marginTop: 16 }}
-            >
-              {loading ? "Cleaning..." : "Clean & Generate Output"}
+                <tbody>
+                  {fields.map((field, index) => (
+                    <tr key={index}>
+                      <td>
+                        <input
+                          placeholder="e.g. customerName"
+                          value={field.outputField}
+                          onChange={(e) =>
+                            updateField(index, "outputField", e.target.value)
+                          }
+                          style={inputStyle}
+                        />
+                      </td>
+
+                      <td>
+                        <select
+                          value={field.sourceColumn}
+                          onChange={(e) =>
+                            updateField(index, "sourceColumn", e.target.value)
+                          }
+                          style={selectStyle}
+                        >
+                          <option value="">-- Select Column --</option>
+
+                          {headers.map((header) => (
+                            <option key={header} value={header}>
+                              {header}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+
+                      <td>
+                        <select
+                          value={field.cleaningRule}
+                          onChange={(e) =>
+                            updateField(index, "cleaningRule", e.target.value)
+                          }
+                          style={selectStyle}
+                        >
+                          {cleaningRules.map((rule) => (
+                            <option key={rule.value} value={rule.value}>
+                              {rule.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+
+                      <td>
+                        <input
+                          placeholder="optional"
+                          value={field.defaultValue}
+                          onChange={(e) =>
+                            updateField(index, "defaultValue", e.target.value)
+                          }
+                          style={inputStyle}
+                        />
+                      </td>
+
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={field.required}
+                          onChange={(e) =>
+                            updateField(index, "required", e.target.checked)
+                          }
+                        />
+                      </td>
+
+                      <td>
+                        <button
+                          onClick={() => removeField(index)}
+                          disabled={fields.length === 1}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <button onClick={addField} style={secondaryButtonStyle}>
+              + Add Field
             </button>
-          </div>
 
-          <div style={{ ...cardStyle, overflowX: "auto" }}>
-            <h2>Sheet Preview</h2>
+            <button onClick={handleClean} disabled={loading} style={buttonStyle}>
+              {loading ? "Cleaning..." : "Clean & Download Output"}
+            </button>
+          </section>
 
-            <table border="1" cellPadding="6" style={{ borderCollapse: "collapse" }}>
+          <section style={{ ...cardStyle, overflowX: "auto" }}>
+            <h2>Uploaded Sheet Preview</h2>
+
+            <table border="1" cellPadding="6" style={previewTableStyle}>
               <thead>
                 <tr>
                   {headers.map((header) => (
@@ -190,22 +346,25 @@ function CleanerPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </section>
         </>
       )}
 
       {cleanResult && (
-        <div style={cardStyle}>
-          <h2>3. Cleaned Output</h2>
+        <section style={cardStyle}>
+          <h2>4. Cleaned Output</h2>
 
-          <p>Total Rows: {cleanResult.totalRows}</p>
-          <p>Valid Rows: {cleanResult.validRows}</p>
-          <p>Invalid Rows: {cleanResult.invalidRows}</p>
+          <div style={statsStyle}>
+            <div>Total Rows: {cleanResult.totalRows}</div>
+            <div>Valid Rows: {cleanResult.validRows}</div>
+            <div>Invalid Rows: {cleanResult.invalidRows}</div>
+          </div>
 
           <a
             href={`${API_BASE}${cleanResult.downloadUrl}`}
             target="_blank"
             rel="noreferrer"
+            style={downloadStyle}
           >
             Download Cleaned Excel
           </a>
@@ -213,7 +372,7 @@ function CleanerPage() {
           <h3>Cleaned Preview</h3>
 
           <div style={{ overflowX: "auto" }}>
-            <table border="1" cellPadding="6" style={{ borderCollapse: "collapse" }}>
+            <table border="1" cellPadding="6" style={previewTableStyle}>
               <thead>
                 <tr>
                   {cleanResult.previewRows?.[0] &&
@@ -238,22 +397,109 @@ function CleanerPage() {
           {cleanResult.errors?.length > 0 && (
             <>
               <h3>Errors</h3>
-              <pre style={{ maxHeight: 300, overflow: "auto" }}>
+              <pre style={errorBoxStyle}>
                 {JSON.stringify(cleanResult.errors, null, 2)}
               </pre>
             </>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
 }
 
+const pageStyle = {
+  minHeight: "100vh",
+  padding: 24,
+  fontFamily: "Arial, sans-serif",
+  background: "#f6f7fb",
+  color: "#111827",
+};
+
+const headerStyle = {
+  padding: 24,
+  borderRadius: 16,
+  background: "linear-gradient(135deg, #111827, #374151)",
+  color: "white",
+  marginBottom: 20,
+};
+
 const cardStyle = {
-  border: "1px solid #ddd",
-  padding: 16,
-  borderRadius: 8,
+  background: "white",
+  border: "1px solid #e5e7eb",
+  padding: 20,
+  borderRadius: 14,
   marginTop: 20,
+  boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
+};
+
+const buttonStyle = {
+  marginLeft: 12,
+  padding: "9px 14px",
+  borderRadius: 8,
+  border: "none",
+  background: "#111827",
+  color: "white",
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle = {
+  marginTop: 16,
+  marginRight: 12,
+  padding: "9px 14px",
+  borderRadius: 8,
+  border: "1px solid #d1d5db",
+  background: "white",
+  cursor: "pointer",
+};
+
+const tableStyle = {
+  width: "100%",
+  borderCollapse: "collapse",
+};
+
+const previewTableStyle = {
+  borderCollapse: "collapse",
+  background: "white",
+  fontSize: 13,
+};
+
+const statsStyle = {
+  display: "flex",
+  gap: 16,
+  marginBottom: 16,
+  fontWeight: "bold",
+};
+
+const downloadStyle = {
+  display: "inline-block",
+  marginBottom: 20,
+  padding: "10px 14px",
+  background: "#16a34a",
+  color: "white",
+  borderRadius: 8,
+  textDecoration: "none",
+};
+
+const errorBoxStyle = {
+  maxHeight: 300,
+  overflow: "auto",
+  background: "#111827",
+  color: "#f9fafb",
+  padding: 12,
+  borderRadius: 8,
+};
+
+const inputStyle = {
+  padding: 7,
+  borderRadius: 6,
+  border: "1px solid #d1d5db",
+};
+
+const selectStyle = {
+  padding: 7,
+  borderRadius: 6,
+  border: "1px solid #d1d5db",
 };
 
 export default CleanerPage;
